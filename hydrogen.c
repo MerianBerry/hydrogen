@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -226,95 +227,19 @@ unsigned long str_hash (char const *str) {
   return hash;
 }
 
+#ifndef va_copy
+#  define va_copy __builtin_va_copy
+#endif
+
 /* Str fmting based off of lua fmt function */
 char *str_fmtv (char const *fmt, va_list args) {
-  char        *buf   = NULL;
-  char const  *e     = NULL;
-  char const  *ogfmt = fmt;
-  const size_t oglen = strlen (fmt);
-  while ((e = strchr (fmt, '%')) != NULL) {
-    size_t len = buf ? strlen (buf) : 0;
-    buf        = str_append (buf, fmt, e - fmt);
-    len        = buf ? strlen (buf) : 0;
-    int extr   = 0;
-    switch (*(e + 1)) {
-    case 's': { /* String */
-      char const *s = va_arg (args, char *);
-      buf           = str_append (buf, (s) ? s : "(null)", -1);
-      break;
-    }
-    case 'c': { /* Character */
-      char c = (char)va_arg (args, int);
-      buf    = str_append (buf, &c, 1);
-      break;
-    }
-    case 'x': {
-      unsigned long n = va_arg (args, unsigned long);
-      int           l = snprintf (NULL, 0, "%lx", n) + 1;
-      char          nbuf[l];
-      snprintf (nbuf, l, "%lx", n);
-      buf = str_append (buf, nbuf, -1);
-      break;
-    }
-    case 'i': { /* 32 bit integer */
-      int  n = va_arg (args, int);
-      int  l = snprintf (NULL, 0, "%i", n) + 1;
-      char numbuf[l];
-      snprintf (numbuf, l, "%i", n);
-      buf = str_append (buf, numbuf, -1);
-      break;
-    }
-    case 'l': { /* 64 bit integer */
-      if (*(e + 2) == 'u') { /* long unsigned */
-        unsigned long n = va_arg (args, unsigned long);
-        int           l = snprintf (NULL, 0, "%lu", n) + 1;
-        char          numbuf[l];
-        snprintf (numbuf, l, "%lu", n);
-        buf = str_append (buf, numbuf, -1);
-        extr += 1;
-        break;
-      }
-      long n = va_arg (args, long);
-      int  l = snprintf (NULL, 0, "%li", n) + 1;
-      buf    = str_append (buf, "(null)", npos);
-      char numbuf[l];
-      snprintf (numbuf, l, "%li", n);
-      buf = str_append (buf, numbuf, -1);
-      break;
-    }
-    case 'f': { /* 64 bit float */
-      double n = va_arg (args, double);
-      int    l = snprintf (NULL, 0, "%lf", n) + 1;
-      char   numbuf[l];
-      snprintf (numbuf, l, "%lf", n);
-      buf = str_append (buf, numbuf, -1);
-      break;
-    }
-    case 'd': { /* 64 bit float */
-      double n = va_arg (args, double);
-      int    l = snprintf (NULL, 0, "%lf", n) + 1;
-      char   numbuf[l];
-      snprintf (numbuf, l, "%lf", n);
-      buf = str_append (buf, numbuf, -1);
-      break;
-    }
-    case 'u': { /* Possible long unsigned */
-      unsigned int n = va_arg (args, unsigned int);
-      int          l = snprintf (NULL, 0, "%u", n) + 1;
-      char         numbuf[l];
-      snprintf (numbuf, l, "%u", n);
-      buf = str_append (buf, numbuf, -1);
-      break;
-    }
-    case '%': {
-      buf = str_append (buf, "%", 1);
-      break;
-    }
-    }
-    fmt = e + 2 + extr;
-  }
-  buf = str_append (buf, fmt, -1);
-  return buf;
+  va_list copy;
+  va_copy (copy, args);
+  int size = vsnprintf (NULL, 0, fmt, copy) + 1;
+  va_end (copy);
+  char *str = malloc (size);
+  vsnprintf (str, size, fmt, args);
+  return str;
 }
 
 char *str_fmt (char const *fmt, ...) {
@@ -343,7 +268,6 @@ char *str_append (char *src, char const *nstr, size_t bytes) {
   memset (buf, 0, l + l2 + 1);
   if (src) {
     memcpy (buf, src, l);
-    free (src);
   }
   memcpy (((char *)buf) + l, nstr, l2);
   return buf;
@@ -368,11 +292,8 @@ char *str_replace (char const *src, long off, long len, char const *str) {
   return nstr;
 }
 
-char *str_colorfmt (char const *src, ...) {
-  va_list args;
-  va_start (args, src);
-
-  char *cpy = (char *)str_cpy (src, npos);
+char *str_colorfmtv (char const *src, va_list args) {
+  char *cpy = str_fmtv (src, args);
   int   itr = 0;
   while (1) {
     if (itr > 100) {
@@ -386,7 +307,7 @@ char *str_colorfmt (char const *src, ...) {
     if (p == npos)
       break;
     if (((p > 0 && cpy[p - 1] != '\\') || !p) && cpy[p + 2] == '(') {
-      size_t eb    = str_ffo (cpy, ')');
+      size_t eb    = str_ffo (cpy + p, ')') + p;
       char  *color = (char *)str_substr (cpy, p + 3, eb - (p + 3));
       if (color) {
         char *ocolor = NULL;
@@ -417,14 +338,15 @@ char *str_colorfmt (char const *src, ...) {
     }
     ++itr;
   }
-  if (itr < 100) {
-    char *fmtstr = str_fmtv (cpy, args);
-    free (cpy);
-    va_end (args);
-    return fmtstr;
-  }
-  va_end (args);
   return cpy;
+}
+
+char *str_colorfmt (char const *src, ...) {
+  va_list args;
+  va_start (args, src);
+  char *str = str_colorfmtv (src, args);
+  va_end (args);
+  return str;
 }
 
 int utf8_charsize (uint8_t c) {
@@ -472,18 +394,18 @@ int utf8_encode (int utf) {
     uint8_t two = 2 << 6 | utf >> 12 & 0x3f;
     uint8_t tre = 2 << 6 | utf >> 6 & 0x3f;
     uint8_t qua = 2 << 6 | utf & 0x3f;
-    out        = one | two << 8 | tre << 16 | qua << 24;
+    out         = one | two << 8 | tre << 16 | qua << 24;
   } /* 3 byte */
   else if (utf > 0x7ff) {
     uint8_t one = 14 << 4 | utf >> 12 & 0xf;
     uint8_t two = 2 << 6 | utf >> 6 & 0x3f;
     uint8_t tre = 2 << 6 | utf & 0x3f;
-    out        = one | two << 8 | tre << 16;
+    out         = one | two << 8 | tre << 16;
   } /* 2 byte */
   else if (utf > 0x7f) {
     uint8_t one = 6 << 5 | utf >> 6 & 0x1f;
     uint8_t two = 2 << 6 | utf & 0x3f;
-    out        = one | two << 8;
+    out         = one | two << 8;
   } /* 1 byte */
   else {
     return utf;
@@ -538,6 +460,56 @@ char *utf8_tostring (int utf8) {
   memset (str, 0, l + 1);
   memcpy (str, &utf8, l);
   return str;
+}
+
+int errorfv (char const *fmt, va_list args) {
+  int   r    = 1;
+  char *str  = str_append ("&c(bright_red)", fmt, npos);
+  char *str2 = str_append (str, "&c(reset)", npos);
+  free (str);
+  str = str_colorfmtv (str2, args);
+  free ((void *)str2);
+  if (!str) {
+    r = 0;
+    goto errorfEnd;
+  }
+  fprintf (stderr, "%s", str);
+  free ((void *)str);
+errorfEnd:
+  return r;
+}
+
+int errorf (char const *fmt, ...) {
+  va_list args;
+  va_start (args, fmt);
+  int r = errorfv (fmt, args);
+  va_end (args);
+  return r;
+}
+
+int warningfv (char const *fmt, va_list args) {
+  int   r    = 1;
+  char *str  = str_append ("&c(yellow)", fmt, npos);
+  char *str2 = str_append (str, "&c(reset)", npos);
+  free (str);
+  str = str_colorfmtv (str2, args);
+  free ((void *)str2);
+  if (!str) {
+    r = 0;
+    goto warningfEnd;
+  }
+  fprintf (stderr, "%s", str);
+  free ((void *)str);
+warningfEnd:
+  return r;
+}
+
+int warningf (char const *fmt, ...) {
+  va_list args;
+  va_start (args, fmt);
+  int r = warningfv (fmt, args);
+  va_end (args);
+  return r;
 }
 
 #pragma endregion "STRING"
@@ -879,10 +851,10 @@ h_buffer io_read (char const *path) {
     return (h_buffer){NULL, 0};
   }
   fseek (stream, -1, SEEK_END);
-  long      strlen = ftell (stream) + 1;
+  long     strlen = ftell (stream) + 1;
   h_buffer buf    = {0};
-  buf.data         = malloc (strlen);
-  buf.size         = strlen;
+  buf.data        = malloc (strlen);
+  buf.size        = strlen;
   fseek (stream, 0, SEEK_SET);
   for (i = 0; i < (size_t)strlen; ++i) {
     ((char *)buf.data)[i] = getc (stream);
@@ -916,62 +888,50 @@ void *mem_copy (void *src, int size) {
 
 #pragma region "VECTOR"
 
-const float pi = 3.14159f;
+float const pi = 3.14159f;
 
-float distance2d(h_vec2 v) {
-  return sqrtf(v.x*v.x + v.y*v.y);
+float distance2d (h_vec2 v) { return sqrtf (v.x * v.x + v.y * v.y); }
+
+float distance3d (h_vec3 v) {
+  return sqrtf (v.x * v.x + v.y * v.y + v.z * v.z);
 }
 
-float distance3d(h_vec3 v) {
-  return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
-}
-
-float dir2d(h_vec2 v) {
+float dir2d (h_vec2 v) {
   if (!v.y && v.x > 0.f)
     return 0.f;
   else if (!v.y && v.x < 0.f)
     return pi;
   else if (!v.x && v.y > 0.f)
-    return pi/2.f;
+    return pi / 2.f;
   else if (!v.x && v.y < 0.f)
-    return 3.f*pi/2.f;
+    return 3.f * pi / 2.f;
   else if (!v.x && !v.y)
     return 0.f;
-  float theta = atanf(v.y / v.x);
+  float theta = atanf (v.y / v.x);
   if (v.x < 0.f)
     theta = pi + theta;
   return theta;
 }
 
-h_vec2 plus2d(h_vec2 a, h_vec2 b) {
-  return (h_vec2){a.x+b.x, a.y+b.y};
+h_vec2 plus2d (h_vec2 a, h_vec2 b) { return (h_vec2){a.x + b.x, a.y + b.y}; }
+
+h_vec2 sub2d (h_vec2 a, h_vec2 b) { return (h_vec2){a.x - b.x, a.y - b.y}; }
+
+h_vec2 mag2d (h_vec2 v, float m) { return (h_vec2){v.x * m, v.y * m}; }
+
+h_vec2 normalize2d (h_vec2 v) {
+  float mag = distance2d (v);
+  return (h_vec2){v.x / mag, v.y / mag};
 }
 
-h_vec2 sub2d(h_vec2 a, h_vec2 b) {
-  return (h_vec2){a.x-b.x, a.y-b.y};
+h_vec3 normalize3d (h_vec3 v) {
+  float mag = distance3d (v);
+  return (h_vec3){v.x / mag, v.y / mag, v.z / mag};
 }
 
-h_vec2 mag2d(h_vec2 v, float m) {
-  return (h_vec2){v.x*m, v.y*m};
-}
+float dot2d (h_vec2 a, h_vec2 b) { return a.x * b.x + a.y * b.y; }
 
-h_vec2 normalize2d(h_vec2 v) {
-  float mag = distance2d(v);
-  return (h_vec2){v.x/mag, v.y/mag};
-}
-
-h_vec3 normalize3d(h_vec3 v) {
-  float mag = distance3d(v);
-  return (h_vec3){v.x/mag, v.y/mag, v.z/mag};
-}
-
-float dot2d(h_vec2 a, h_vec2 b) {
-  return a.x*b.x + a.y*b.y;
-}
-
-float dot3d(h_vec3 a, h_vec3 b) {
-  return a.x*b.x + a.y*b.y + a.z*b.z;
-}
+float dot3d (h_vec3 a, h_vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 #pragma endregion "VECTOR"
 

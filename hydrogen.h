@@ -134,6 +134,8 @@ char *str_append (char *src, char const *nstr, size_t bytes);
  */
 char *str_replace (char const *src, long off, long len, char const *str);
 
+char *str_colorfmtv (char const *src, va_list args);
+
 char *str_colorfmt (char const *src, ...);
 
 int utf8_charsize (fu_byte c);
@@ -154,6 +156,14 @@ int utf8_swap (int utf8);
 int utf8_literal (int utf);
 
 char *utf8_tostring (int utf8);
+
+int errorfv (char const *fmt, va_list args);
+
+int errorf(const char* fmt, ...);
+
+int warningfv (char const *fmt, va_list args);
+
+int warningf (char const *fmt, ...);
 #endif
 
 #ifdef HYDROGEN_IO
