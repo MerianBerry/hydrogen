@@ -21,7 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-See github at https://github.com/MerianBerry/hydrogen
+See github at https:/*github.com/MerianBerry/hydrogen
 */
 
 /*
@@ -29,16 +29,12 @@ See github at https://github.com/MerianBerry/hydrogen
   Hydrogen source file
 */
 
-
-
-
 #define _XOPEN_SOURCE 700
 #define HYDROGEN_ALL
 #include <assert.h>
-#include <dirent.h>
 #include <math.h>
-#include <stdio.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -47,6 +43,7 @@ See github at https://github.com/MerianBerry/hydrogen
 #ifdef _WIN32
 #  include <windows.h>
 #else
+/* #  include <dirent.h> */
 #  include <unistd.h>
 #endif
 
@@ -67,11 +64,9 @@ See github at https://github.com/MerianBerry/hydrogen
 h_timepoint timenow() {
 #if defined(_WIN32)
   h_timepoint   tp;
-  LARGE_INTEGER li;
-  QueryPerformanceFrequency (&li);
-  tp.freq = (double)(li.QuadPart) / 1000.0;
-  QueryPerformanceCounter (&li);
-  tp.c = li.QuadPart;
+  LARGE_INTEGER pc;
+  QueryPerformanceCounter (&pc);
+  tp.c = pc.QuadPart;
   return tp;
 #elif defined(__GNUC__)
   timespec_t ts;
@@ -90,8 +85,8 @@ void microsleep (long usec) {
   HANDLE        timer;
   LARGE_INTEGER ft;
 
-  ft.QuadPart = -(10 * usec); // Convert to 100 nanosecond interval, negative
-                              // value indicates relative time
+  ft.QuadPart = -(10 * usec); /* Convert to 100 nanosecond interval, negative */
+  /* value indicates relative time */
 
   timer = CreateWaitableTimer (NULL, TRUE, NULL);
   SetWaitableTimer (timer, &ft, 0, NULL, NULL, 0);
@@ -102,7 +97,9 @@ void microsleep (long usec) {
 
 double timeduration (h_timepoint end, h_timepoint start, double ratio) {
 #if defined(_WIN32)
-  double ndif = (double)(end.c - end.c) / end.freq;
+  LARGE_INTEGER pf;
+  QueryPerformanceFrequency (&pf);
+  double ndif = (double)(end.c - start.c) / (double)pf.QuadPart;
   return ndif * ratio;
 #elif defined(__GNUC__)
   double t1 = (double)end.s + (double)end.ns / 1000000000.0;
@@ -112,6 +109,30 @@ double timeduration (h_timepoint end, h_timepoint start, double ratio) {
 #endif
 }
 
+#if defined(_WIN32)
+/* Windows sleep in 100ns units */
+BOOLEAN _nanosleep (LONGLONG ns) {
+  /* Declarations */
+  HANDLE        timer; /* Timer handle */
+  LARGE_INTEGER li; /* Time defintion */
+  /* Create timer */
+  if (!(timer = CreateWaitableTimer (NULL, TRUE, NULL)))
+    return FALSE;
+  /* Set timer properties */
+  li.QuadPart = -ns;
+  if (!SetWaitableTimer (timer, &li, 0, NULL, NULL, FALSE)) {
+    CloseHandle (timer);
+    return FALSE;
+  }
+  /* Start & wait for timer */
+  WaitForSingleObject (timer, INFINITE);
+  /* Clean resources */
+  CloseHandle (timer);
+  /* Slept without problems */
+  return TRUE;
+}
+#endif
+
 void wait (double seconds) {
 #ifdef __unix__
   h_timepoint s = timenow();
@@ -120,14 +141,10 @@ void wait (double seconds) {
     nanosleep (&ts, &tsr);
   }
 #elif defined(_WIN32)
-  __int64       us = (__int64)(seconds * 1000000.0);
-  HANDLE        timer;
-  LARGE_INTEGER ft;
-  ft.QuadPart = -(10 * us);
-  timer       = CreateWaitableTimer (NULL, TRUE, NULL);
-  SetWaitableTimer (timer, &ft, 0, NULL, NULL, 0);
-  WaitForSingleObject (timer, INFINITE);
-  CloseHandle (timer);
+  h_timepoint s = timenow();
+  while (timeduration (timenow(), s, seconds_e) < seconds) {
+    _nanosleep (10);
+  }
 #endif
 }
 
@@ -140,14 +157,9 @@ void waitms (double ms) {
   while (nanosleep (&ts, &ts) == -1)
     ;
 #elif defined(_WIN32)
-  __int64       us = (__int64)(ms * 1000.0);
-  HANDLE        timer;
-  LARGE_INTEGER ft;
-  ft.QuadPart = -(10 * us);
-  timer       = CreateWaitableTimer (NULL, TRUE, NULL);
-  SetWaitableTimer (timer, &ft, 0, NULL, NULL, 0);
-  WaitForSingleObject (timer, INFINITE);
-  CloseHandle (timer);
+  LONGLONG ns = ms * 1000 * 10;
+  /* printf("%li\n", ns); */
+  _nanosleep (ns);
 #endif
 }
 
@@ -497,12 +509,16 @@ char *utf8_tostring (int utf8) {
 }
 
 int errorfv (char const *fmt, va_list args) {
-  int   r    = 1;
+  int r = 1;
+#if defined(__unix__)
   char *str  = str_append ("&c(bright_red)", fmt, npos);
   char *str2 = str_append (str, "&c(reset)", npos);
   free (str);
   str = str_colorfmtv (str2, args);
   free ((void *)str2);
+#elif defined(_WIN32)
+  char *str   = (char *)str_fmtv (fmt, args);
+#endif
   if (!str) {
     r = 0;
     goto errorfEnd;
@@ -818,10 +834,73 @@ int io_scandir (char const *dir, dirent_t ***pList, int *pCount) {
 #endif
 
 #ifdef _WIN32
-#  include <WinBase.h>
+#  include <winbase.h>
+#elif defined(__unix__)
+#  include <dirent.h>
 #endif
 
 typedef struct stat stat_t;
+typedef char       *dirToken;
+
+dirToken *io_parseDirectory (char const *path, int *count) {
+  int          i;
+  const size_t l = strlen (path);
+
+  dirToken *tokens = NULL;
+
+  int c = 0;
+  for (i = 0; i < l; ++i) {
+    size_t   p = MIN (str_ffo (path + i, '\\'), str_ffo (path + i, '/'));
+    dirToken t = (dirToken)str_substr (path, i, p);
+    tokens     = mem_grow (tokens, sizeof (dirToken), c, &t, 1);
+    ++c;
+    if (p == npos)
+      break;
+    i += p;
+  }
+}
+
+/*char *io_fullpath (char const *path) {
+  int       i;
+  char     *fpath  = NULL;
+  int       c      = 0;
+  dirToken *tokens = NULL;
+  if (!path)
+    return NULL;
+  if (path[0] == '~' || path[0] == '/') {}
+
+  io_parseDirectory (path, &c);
+#if defined(_WIN32)
+  char  var[PATH_MAX + 1] = {0};
+  DWORD l                 = GetEnvironmentVariable ("HOMEDRIVE", var, PATH_MAX);
+  GetEnvironmentVariable ("HOMEPATH", var + l, PATH_MAX - l);
+#elif defined(__unix__)
+  char *var   = getenv ("HOME");
+#endif
+  fpath = str_append (var, "/", npos);
+  if (!strcmp (tokens[0], "~")) {
+    free ((void *)tokens[0]);
+    tokens = &tokens[1];
+    --c;
+  }
+  for (i = 0; i < c; ++i) {
+    if (!strcmp (tokens[i], "~")) {
+      free ((void *)fpath);
+      fpath = NULL;
+      goto cleanup;
+    }
+  }
+  for (i = 0; i < c; ++i) {
+    printf ("dir token: %s\n", tokens[i]);
+    if (!strcmp (tokens[i], "..")) {}
+  }
+cleanup:
+  for (i = 0; i < c; ++i) {
+    free ((void *)tokens[i]);
+  }
+  free ((void *)tokens);
+  return NULL;
+}*/
 
 char *io_fixhome (char const *path) {
 #if defined(_WIN32)
@@ -839,6 +918,7 @@ char *io_fixhome (char const *path) {
   return (char *)str_cpy (path, strlen (path));
 }
 
+/*
 char io_direxists (char const *path) {
   char *npath = io_fixhome (path);
   DIR  *d     = opendir (npath);
@@ -848,6 +928,7 @@ char io_direxists (char const *path) {
   closedir (d);
   return 1;
 }
+*/
 
 char io_exists (char const *path) {
   char *npath = io_fixhome (path);

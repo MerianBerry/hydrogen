@@ -43,11 +43,6 @@ See github at https://github.com/MerianBerry/hydrogen
 #  define HYDROGEN_MATH
 #endif
 
-/* Opaque module structure */
-typedef struct fu_module fu_module;
-
-typedef unsigned char fu_byte;
-
 #ifdef HYDROGEN_TIME
 enum {
   seconds_e      = 1,
@@ -58,7 +53,7 @@ enum {
 
 typedef struct h_timepoint {
 #  if defined(_WIN32)
-  double freq;
+  long s;
   long   c;
 #  elif defined(__GNUC__)
   long s;
@@ -211,9 +206,11 @@ int io_scandir (char const *dir, dirent_t ***pList, int *pCount);
 #    endif
 #  endif
 
+/* char *io_fullpath (char const *path); */
+
 char *io_fixhome (char const *path);
 
-char io_direxists (char const *path);
+/* char io_direxists (char const *path); */
 
 char io_exists (char const *path);
 

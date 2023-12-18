@@ -1,3 +1,5 @@
 build
-build/hydrogen
-build/libhydrogen.a
+.vscode
+*.o
+*.a
+*.lib
